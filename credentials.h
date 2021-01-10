@@ -1,0 +1,2 @@
+char networkSSID[] = "";
+char networkPassword[] = "";
