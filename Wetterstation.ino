@@ -1,6 +1,8 @@
 #include <PubSubClient.h>
 #include <WiFi.h>
-#include <EEPROM.h>
+#include <Preferences.h>
+#include <HTTPClient.h>
+#include <ArduinoJson.h>
 
 #include <Adafruit_BME280.h>
 
@@ -18,7 +20,7 @@ int delayTime;
 const char* cfg_wifi_ssid = networkSSID;
 const char* cfg_wifi_password = networkPassword;
 
-const char* mqtt_server = "192.168.1.11";
+const char* mqtt_server = "192.168.1.109";
 const unsigned int mqtt_port = 1883;
 
 WiFiClient espClient;
@@ -31,6 +33,10 @@ String helperTopic;
 DataPoint datapoints[DATAPOINTS_COUNT];
 char pub[10];
 
+String serverName = "http://localhost:8000/station";
+String postMessage;
+
+Preferences preferences;
 
 void setup() {
   // put your setup code here, to run once:
@@ -54,9 +60,11 @@ void setup() {
   client.setServer(mqtt_server, mqtt_port);
   client.connect("ESP32");
 
-  EEPROM.begin(512);
+  preferences.begin("credentials", false);
   
   setupUuid();
+
+  preferences.end();
 
   topic = "Equinox/" + uuid + "/";
   Serial.println(topic);
@@ -104,13 +112,16 @@ float getAltitude() {
 
 
 void setupUuid() {
-  unsigned char k;
-  
-  k = EEPROM.read(0);
-  Serial.print("Value char: ");
-  Serial.println(k, DEC);
+  String k;
 
-  if (k == 255) {
+  preferences.clear();
+
+  k = preferences.getString("uuid", "null");
+
+  Serial.print("Value char: ");
+  Serial.println(k);
+
+  if (k == "null") {
     uuid = generateUuid();
     writeUuid(uuid);
   } else {
@@ -120,23 +131,12 @@ void setupUuid() {
 
 
 String readUuid() {
-  unsigned char k;
-  int i;
-  char data[40];
-  int len = 0;
+  String k = preferences.getString("uuid");
 
-  Serial.println("Reading uuid from EEPROM...");
-    
-  while (k != '\0' && len < 39) {
-    k = EEPROM.read(len);
-    data[len] = k; 
-    len++;
-  }
+  Serial.print("Uuid: ");
+  Serial.println(k);
 
-  Serial.println("Uuid: ");
-  Serial.println(String(data));
-
-  return String(data);
+  return k;
 }
 
 
@@ -144,11 +144,36 @@ String generateUuid() {
   String uuid;
   Serial.println("Generating uuid...");
 
-  // TODO: Generate uuid automatically, with http request or libary
+  HTTPClient http;
+  const int capacity = JSON_OBJECT_SIZE(2);
+  StaticJsonDocument<capacity> doc;
+  doc["name"] = "Gainer's Station";
+  doc["location"] = "Schlanders";
+
+  serializeJsonPretty(doc, postMessage);
+  serializeJsonPretty(doc, Serial);
+  Serial.println(serverName);
+  http.begin(serverName);
+  http.addHeader("Content-Type", "application/json");
   
-  uuid = "0ba0bfd0-4dac-11eb-8404-0800200c9a66";
+  int httpResponse = http.POST(postMessage);
+
+  if (httpResponse>0) {
+      Serial.print("HTTP Response code: ");
+      Serial.println(httpResponse);
+      String payload = http.getString();
+      Serial.println(payload);
+      uuid = payload;
+  }
+  else {
+      Serial.print("Error code: ");
+      Serial.println(httpResponse);
+  }
+      
+  http.end();
   
-  Serial.println("uuid generated: ");
+  
+  Serial.print("uuid generated: ");
   Serial.println(uuid);
 
   return uuid;
@@ -156,16 +181,10 @@ String generateUuid() {
 }
 
 void writeUuid(String uuid) {
-  int _size = uuid.length();
 
   Serial.println("Writing uuid to EEPROM...");
 
-  for (int i = 0; i < _size; i++) {
-    EEPROM.write(i, uuid[i]);
-  }
-
-  EEPROM.write(_size, '\0');
-  EEPROM.commit();
+  preferences.putString("uuid", uuid);
 
   Serial.println("Uuid has been written on EEPROM");
 }
